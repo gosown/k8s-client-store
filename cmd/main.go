@@ -1,144 +1,69 @@
 package main
 
 import (
-	"github.com/eapache/channels"
-	store "github.com/gosown/k8s-client-store"
-	"github.com/gosown/k8s-client-store/task"
-	"k8s.io/apimachinery/pkg/labels"
-	clientset "k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/record"
-	"k8s.io/client-go/util/flowcontrol"
-	"net"
-	"net/http"
-	"sync"
-	"time"
+	"fmt"
+	k8s_client_store "github.com/gosown/k8s-client-store"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"os"
+	"os/signal"
 )
 
-type Configuration struct {
-	APIServerHost string
-	RootCAFile    string
-
-	KubeConfigFile string
-
-	Client clientset.Interface
-
-	ResyncPeriod time.Duration
-
-	ConfigMapName  string
-	DefaultService string
-
-	Namespace string
-
-	WatchNamespaceSelector labels.Selector
-
-	// +optional
-	TCPConfigMapName string
-	// +optional
-	UDPConfigMapName string
-
-	DefaultSSLCertificate string
-
-	// +optional
-	PublishService       string
-	PublishStatusAddress string
-
-	UpdateStatus           bool
-	UseNodeInternalIP      bool
-	ElectionID             string
-	UpdateStatusOnShutdown bool
-
-	HealthCheckHost string
-
-	DisableServiceExternalName bool
-
-	EnableSSLPassthrough bool
-
-	EnableProfiling bool
-
-	EnableMetrics       bool
-	MetricsPerHost      bool
-	ReportStatusClasses bool
-
-	SyncRateLimit float32
-
-	DisableCatchAll bool
-
-	ValidationWebhook         string
-	ValidationWebhookCertPath string
-	ValidationWebhookKeyPath  string
-	DisableFullValidationTest bool
-
-	MaxmindEditionFiles *[]string
-
-	MonitorMaxBatchSize int
-
-	PostShutdownGracePeriod int
-	ShutdownGracePeriod     int
-
-	InternalLoggerAddress string
-	IsChroot              bool
-	DeepInspector         bool
-
-	DynamicConfigurationRetries int
-}
-
-type NGINXController struct {
-	cfg *Configuration
-
-	recorder record.EventRecorder
-
-	syncQueue *task.Queue
-
-	syncRateLimiter flowcontrol.RateLimiter
-
-	// stopLock is used to enforce that only a single call to Stop send at
-	// a given time. We allow stopping through an HTTP endpoint and
-	// allowing concurrent stoppers leads to stack traces.
-	stopLock *sync.Mutex
-
-	stopCh   chan struct{}
-	updateCh *channels.RingChannel
-
-	// ngxErrCh is used to detect errors with the NGINX processes
-	ngxErrCh chan error
-
-	resolver []net.IP
-
-	isIPV6Enabled bool
-
-	isShuttingDown bool
-
-	store store.Storer
-
-	validationWebhookServer *http.Server
-}
-
-func (n *NGINXController) syncIngress(interface{}) error {
-	n.syncRateLimiter.Accept()
-
-	if n.syncQueue.IsShuttingDown() {
-		return nil
-	}
-	return nil
-}
-
 func main() {
-	config := &Configuration{}
+	fmt.Println("------------ 1-list-watcher ------------")
+	lw := k8s_client_store.NewConfigMapListWatcher()
 
-	n := &NGINXController{}
+	list, err := lw.List(metav1.ListOptions{})
+	if err != nil {
+		panic(err)
+	}
 
-	n.store = store.New(
-		config.Namespace,
-		config.WatchNamespaceSelector,
-		config.ConfigMapName,
-		config.TCPConfigMapName,
-		config.UDPConfigMapName,
-		config.DefaultSSLCertificate,
-		config.ResyncPeriod,
-		config.Client,
-		n.updateCh, // 当有更新后，推到此channel
-		config.DisableCatchAll,
-		config.DeepInspector)
+	items, err := meta.ExtractList(list)
+	if err != nil {
+		panic(err)
+	}
 
-	n.syncQueue = task.NewTaskQueue(n.syncIngress) // 设置消费方
+	for _, item := range items {
+		configMap, ok := item.(*corev1.ConfigMap)
+		if !ok {
+			return
+		}
+		fmt.Println(configMap.Name)
+	}
+
+	listMetaInterface, err := meta.ListAccessor(list)
+	if err != nil {
+		panic(err)
+	}
+
+	resourceVersion := listMetaInterface.GetResourceVersion()
+	w, err := lw.Watch(metav1.ListOptions{ResourceVersion: resourceVersion})
+	if err != nil {
+		panic(err)
+	}
+
+	stopCh := make(chan os.Signal)
+	signal.Notify(stopCh, os.Interrupt)
+
+	fmt.Println("Start watching...")
+
+loop:
+	for {
+		select {
+		case <-stopCh:
+			fmt.Println("Interrupted")
+			break loop
+		case event, ok := <-w.ResultChan():
+			if !ok {
+				fmt.Println("Broken channel")
+				break loop
+			}
+			configMap, ok := event.Object.(*corev1.ConfigMap)
+			if !ok {
+				return
+			}
+			fmt.Printf("%s: %s\n", event.Type, configMap.Name)
+		}
+	}
 }
