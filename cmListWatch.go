@@ -5,12 +5,12 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-// newConfigMapListWatcher 用于创建 tmp、namespace 下 configmap 资源的 ListWatcher 实例
-func NewConfigMapListWatcher() *cache.ListWatch {
+// NewConfigMapsListWatcher 用于创建 tmp、namespace 下 configmap 资源的 ListWatcher 实例
+func NewConfigMapsListWatcher() *cache.ListWatch {
 	clientset := NewClientset()
 	client := clientset.CoreV1().RESTClient()
 	resource := "configmaps"
-	namespace := "tmp"
+	namespace := "default"
 	selector := fields.Everything()
 	lw := cache.NewListWatchFromClient(client, resource, namespace, selector)
 	return lw

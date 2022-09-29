@@ -12,7 +12,7 @@ import (
 
 func main() {
 	fmt.Println("------------ 1-list-watcher ------------")
-	lw := k8s_client_store.NewConfigMapListWatcher()
+	lw := k8s_client_store.NewConfigMapsListWatcher()
 
 	list, err := lw.List(metav1.ListOptions{})
 	if err != nil {
